@@ -29,4 +29,4 @@ COPY --from=base /app/dist ./dist
 RUN mkdir -p /app/data /app/data/index
 
 # Default command runs the compiled MCP server over stdio
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/src/server.js"]

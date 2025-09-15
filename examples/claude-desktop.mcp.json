@@ -2,9 +2,8 @@
   "mcpServers": {
     "aglc4": {
       "command": "node",
-      "args": ["dist/server.js"],
+      "args": ["dist/src/server.js"],
       "env": {}
     }
   }
 }
-

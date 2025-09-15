@@ -1,29 +1,34 @@
 import fs from "node:fs";
 import path from "node:path";
-import pdfParse from "pdf-parse";
+// Workaround: import implementation directly to avoid debug harness in pdf-parse/index.js
+// that tries to read a test PDF when module.parent is undefined under ESM/tsx.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { buildInverted, chunkText, Index, writeJson } from "../src/lib/pdf.js";
+import { loadConfig } from "../src/lib/config.js";
+import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
-
-type Chunk = { id: number; text: string; page?: number };
-type Index = { chunks: Chunk[]; inverted: Record<string, number[]> };
-
-function tokenize(s: string): string[] {
-  return s
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-}
 
 async function ensureDirs() {
   await fs.promises.mkdir("data/index", { recursive: true });
 }
 
+// Render pages and insert explicit page markers understood by the chunker
 async function readPdf(pdfPath: string): Promise<string> {
   const buf = await fs.promises.readFile(pdfPath);
-  const res = await pdfParse(buf);
+  const res = await pdfParse(buf, {
+    pagerender: (pageData: any) => {
+      return pageData.getTextContent().then((tc: any) => {
+        const strs = tc.items.map((it: any) => it.str);
+        const pageText = strs.join("\n");
+        return `<<<PAGE:${pageData.pageNumber}>>>\n` + pageText;
+      });
+    },
+  });
   return res.text || "";
 }
 
@@ -44,49 +49,12 @@ async function ocrPdf(input: string, output: string): Promise<void> {
   }
 }
 
-function chunkText(text: string): Chunk[] {
-  const para = text
-    .split(/\n\s*\n/g)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
-  const chunks: Chunk[] = [];
-  let id = 0;
-  for (const p of para) {
-    if (p.length <= 800) {
-      chunks.push({ id: id++, text: p });
-    } else {
-      // further split long paragraphs
-      const parts = p.split(/(?<=[\.\?\!])\s+/g);
-      let current = "";
-      for (const sentence of parts) {
-        if ((current + " " + sentence).trim().length > 800) {
-          chunks.push({ id: id++, text: current.trim() });
-          current = sentence;
-        } else {
-          current += (current ? " " : "") + sentence;
-        }
-      }
-      if (current.trim()) chunks.push({ id: id++, text: current.trim() });
-    }
-  }
-  return chunks;
-}
-
-function buildInverted(chunks: Chunk[]): Record<string, number[]> {
-  const inverted: Record<string, number[]> = {};
-  for (const c of chunks) {
-    const seen = new Set<string>();
-    for (const t of tokenize(c.text)) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      (inverted[t] ||= []).push(c.id);
-    }
-  }
-  return inverted;
-}
-
 async function main() {
-  const pdfPath = process.env.PDF_PATH || path.resolve("data/AGLC4.pdf");
+  // Accept CLI arg: --pdf <path>
+  const cfg = loadConfig();
+  const argIdx = process.argv.indexOf("--pdf");
+  let pdfPath = (argIdx !== -1 ? process.argv[argIdx + 1] : undefined) || process.env.PDF_PATH || path.resolve(cfg.pdfDir, "AGLC4.pdf");
+  if (!path.isAbsolute(pdfPath)) pdfPath = path.resolve(cfg.pdfDir, pdfPath);
   if (!fs.existsSync(pdfPath)) {
     console.error(`Missing PDF at ${pdfPath}. Place the file and re-run.`);
     process.exit(1);
@@ -102,13 +70,22 @@ async function main() {
     text = await readPdf(ocrOut);
   }
   console.log("Chunking…");
-  const chunks = chunkText(text);
+  const chunks = chunkText(text, { maxLen: 1000, sentenceSplit: true });
   console.log(`Chunks: ${chunks.length}`);
   const inverted = buildInverted(chunks);
-  const index: Index = { chunks, inverted };
-  const outPath = path.resolve("data/index/index.json");
-  await fs.promises.writeFile(outPath, JSON.stringify(index));
-  console.log(`Wrote index to ${outPath}`);
+  // Build metadata
+  const stat = await fs.promises.stat(pdfPath);
+  const hash = crypto.createHash("sha256").update(await fs.promises.readFile(pdfPath)).digest("hex");
+  const base = path.basename(pdfPath).replace(/\.pdf$/i, "");
+  const index: Index = { chunks, inverted, meta: { source: base, createdAt: Date.now(), pdfSize: stat.size, pdfMtime: stat.mtimeMs, pdfHash: hash } };
+  // Write per-source path and legacy path
+  const outDir = path.resolve(cfg.indexDir, base);
+  await fs.promises.mkdir(outDir, { recursive: true });
+  const perSource = path.join(outDir, "index.json");
+  const legacy = path.resolve(cfg.indexDir, "index.json");
+  await writeJson(perSource, index);
+  await writeJson(legacy, index);
+  console.log(`Wrote index to ${perSource} and ${legacy}`);
 }
 
 main().catch((err) => {
