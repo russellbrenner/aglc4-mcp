@@ -10,6 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "index": "tsx scripts/build-index.ts",
+    "search": "tsx scripts/quick-search.ts",
+    "health": "tsx scripts/health.ts",
     "lint": "eslint .",
     "format": "prettier -w .",
     "test": "vitest run"
@@ -27,4 +29,3 @@
     "vitest": "^2.0.5"
   }
 }
-

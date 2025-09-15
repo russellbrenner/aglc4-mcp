@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import pdfParse from "pdf-parse";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 type Chunk = { id: number; text: string; page?: number };
 type Index = { chunks: Chunk[]; inverted: Record<string, number[]> };
@@ -21,6 +25,23 @@ async function readPdf(pdfPath: string): Promise<string> {
   const buf = await fs.promises.readFile(pdfPath);
   const res = await pdfParse(buf);
   return res.text || "";
+}
+
+async function ocrPdf(input: string, output: string): Promise<void> {
+  const lang = process.env.OCR_LANG || "eng";
+  const force = process.env.OCR_FORCE === "1";
+  const args = [force ? "--force-ocr" : "--skip-text", "--language", lang, input, output];
+  try {
+    await execFileAsync("ocrmypdf", args, { maxBuffer: 1024 * 1024 * 64 });
+  } catch (err: any) {
+    const hint =
+      process.platform === "darwin"
+        ? "Install with: brew install ocrmypdf tesseract"
+        : "Install with: apt-get install -y ocrmypdf tesseract-ocr (Debian/Ubuntu)";
+    throw new Error(
+      `Failed to run ocrmypdf. Ensure it is installed. ${hint}.\nOriginal error: ${err?.message || err}`
+    );
+  }
 }
 
 function chunkText(text: string): Chunk[] {
@@ -72,7 +93,14 @@ async function main() {
   }
   await ensureDirs();
   console.log("Reading PDF…");
-  const text = await readPdf(pdfPath);
+  let text = await readPdf(pdfPath);
+  if (!text || text.trim().length < 1000) {
+    const ocrOut = path.resolve("data/AGLC4.ocr.pdf");
+    console.log("PDF appears non-text or very short; running OCR…");
+    await ocrPdf(pdfPath, ocrOut);
+    console.log("OCR complete. Re-reading OCR'd PDF…");
+    text = await readPdf(ocrOut);
+  }
   console.log("Chunking…");
   const chunks = chunkText(text);
   console.log(`Chunks: ${chunks.length}`);
@@ -87,4 +115,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

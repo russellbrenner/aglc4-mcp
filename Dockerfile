@@ -18,6 +18,10 @@ RUN npm run build
 FROM node:20-slim
 WORKDIR /app
 ENV NODE_ENV=production
+# Install OCR tools for runtime indexing
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ocrmypdf tesseract-ocr \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/dist ./dist
 
@@ -26,4 +30,3 @@ RUN mkdir -p /app/data /app/data/index
 
 # Default command runs the compiled MCP server over stdio
 CMD ["node", "dist/server.js"]
-

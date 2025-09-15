@@ -54,6 +54,12 @@ function scoreChunks(query: string, index: Index): { chunk: Chunk; score: number
   return results;
 }
 
+export async function searchLocal(query: string, limit = 5): Promise<{ chunk: Chunk; score: number }[]> {
+  if (!INDEX) await loadIndex();
+  const index = INDEX!;
+  return scoreChunks(query, index).slice(0, Math.max(1, Math.min(20, limit)));
+}
+
 export const searchTool = {
   schema: {
     name: "search_aglc4",
@@ -95,4 +101,3 @@ export const searchTool = {
     };
   }
 };
-
